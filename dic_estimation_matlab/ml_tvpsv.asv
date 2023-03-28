@@ -1,0 +1,72 @@
+% This function estimates the marginal likelihood of the TVP-SV model in Chan 
+% and Eisenstat (2018)
+% 
+% See:
+% Chan, J.C.C. and Eisenstat, E. (2018). Bayesian model comparison for 
+% time-varying parameter VARs with stochastic volatility, Journal of 
+% Applied Econometrics, 33(4), 509-532.
+
+function [ml, mlstd] = ml_tvpsv(Y,store_Sigtheta,store_Sigh,store_h0,store_theta0,...
+    prior,bigX,M)
+
+disp('Computing marginal likelihood of TVP-SV.... '); 
+
+M = 20*ceil(M/20);
+n = size(store_Sigh,2);
+k = size(store_Sigtheta,2);
+
+tmp = zeros(k,2);
+for i=1:k
+    tmp(i,:) = gamfit(1./store_Sigtheta(:,i));    
+end
+nuthetahat = tmp(:,1); Sthetahat = 1./tmp(:,2);    
+tmp = zeros(n,2);
+for i=1:n
+    tmp(i,:) = gamfit(1./store_Sigh(:,i));    
+end
+nuhhat = tmp(:,1); Shhat = 1./tmp(:,2);  
+
+theta0hat = mean(store_theta0)';
+theta0std = chol(cov(store_theta0),'lower');
+theta0pre = cov(store_theta0)\speye(k);
+h0hat = mean(store_h0)';
+h0std = chol(cov(store_h0),'lower');
+h0pre = cov(store_h0)\speye(n);
+
+big_Sigtheta = zeros(M,k);
+for i=1:k
+    big_Sigtheta(:,i) = 1./gamrnd(nuthetahat(i),1./Sthetahat(i),M,1);
+end
+big_Sigh = zeros(M,n);
+for i=1:n
+    big_Sigh(:,i) = 1./gamrnd(nuhhat(i),1./Shhat(i),M,1);
+end
+big_theta0 = repmat(theta0hat',M,1) + (theta0std*randn(k,M))';
+big_h0 = repmat(h0hat',M,1) + (h0std*randn(n,M))';
+
+store_w = zeros(M,1);
+cIS = nuthetahat'*log(Sthetahat) - sum(gammaln(nuthetahat)) ...
+    + nuhhat'*log(Shhat) - sum(gammaln(nuhhat)) ...
+    -.5*(k+n)*log(2*pi) - sum(log(diag(theta0std))) - sum(log(diag(h0std)));
+gIS = @(sthe,sh,a0,b0) cIS -(nuthetahat+1)'*log(sthe) - sum(Sthetahat./sthe) ... 
+    -(nuhhat+1)'*log(sh) - sum(Shhat./sh) ...
+    -.5*(a0-theta0hat)'*theta0pre*(a0-theta0hat) -.5*(b0-h0hat)'*h0pre*(b0-h0hat);
+
+for loop = 1:M
+    Sigtheta = big_Sigtheta(loop,:)';
+    Sigh = big_Sigh(loop,:)';
+    theta0 = big_theta0(loop,:)';
+    h0 = big_h0(loop,:)';
+    
+    llike = intlike_tvpsv(Y,Sigtheta,Sigh,bigX,h0,theta0);
+    store_w(loop) = llike + prior(Sigtheta,Sigh,theta0,h0) ...
+        - gIS(Sigtheta,Sigh,theta0,h0);
+end
+shortw = reshape(store_w,M/20,20);
+maxw = max(shortw);
+
+bigml = log(mean(exp(shortw-repmat(maxw,M/20,1)),1)) + maxw;
+ml = mean(bigml);
+mlstd = std(bigml)/sqrt(20);
+
+end
